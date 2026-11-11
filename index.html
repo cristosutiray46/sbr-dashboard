@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Self-Balancing Robot (BLE)</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b5ed7">
+<style>
+  :root { --bg:#eef2f7; --card:#fff; --ink:#1f2933; --mut:#5f6b7a; --line:#d5dbe3; --pri:#0b5ed7; --ok:#198754; --bad:#c82333; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:var(--bg); color:var(--ink); font:14px/1.4 "Segoe UI",Tahoma,sans-serif; }
+  h1 { font-size:18px; margin:0 0 2px; } .sub { color:var(--mut); margin-bottom:12px; font-size:12px; }
+  .grid { display:grid; grid-template-columns:340px 1fr; gap:12px; max-width:1300px; margin:0 auto; }
+  @media (max-width:900px){ .grid{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border-radius:10px; padding:12px; box-shadow:0 1px 6px rgba(0,0,0,.08); margin-bottom:12px; }
+  .card h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); }
+  button { border:0; border-radius:7px; padding:9px 12px; font-weight:600; cursor:pointer; background:#e3e8ef; color:var(--ink); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .pri { background:var(--pri); color:#fff; } .ok { background:var(--ok); color:#fff; }
+  .stop { background:var(--bad); color:#fff; font-size:18px; padding:16px; width:100%; }
+  .row { display:flex; gap:8px; align-items:center; margin:5px 0; } .row > label { flex:1; font-family:monospace; }
+  input[type=number], select, input[type=text] { width:92px; padding:5px; border:1px solid var(--line); border-radius:6px; }
+  input[type=text] { width:140px; }
+  .wide { width:100%; } .half { flex:1; }
+  .move { height:54px; font-size:17px; background:#323a45; color:#fff; flex:1; touch-action:none; user-select:none; }
+  .move.on { background:var(--pri); }
+  .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .kv { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; text-align:center; }
+  .kv small { display:block; color:var(--mut); font-size:11px; }
+  .badge { display:inline-block; padding:3px 9px; border-radius:99px; font-weight:700; font-size:12px; background:#e3e8ef; }
+  .badge.A { background:var(--ok); color:#fff; } .badge.F { background:var(--bad); color:#fff; }
+  .lamp { width:12px; height:12px; border-radius:50%; background:#b8c0cc; display:inline-block; vertical-align:middle; }
+  .lamp.on { background:var(--ok); }
+  canvas { width:100%; height:210px; display:block; }
+  #log { background:#14181d; color:#7CFC8A; font:12px/1.35 Consolas,monospace; height:120px; overflow:auto; padding:8px; border-radius:6px; white-space:pre-wrap; }
+  .hint { color:var(--mut); font-size:12px; }
+  .stopbar { display:none; }
+  @media (max-width:900px){
+    .stopbar { display:block; position:fixed; left:0; right:0; bottom:0; z-index:10; padding:8px 12px calc(8px + env(safe-area-inset-bottom)); background:rgba(238,242,247,.96); box-shadow:0 -2px 8px rgba(0,0,0,.12); }
+    body { padding-bottom:90px; }
+  }
+</style>
+</head>
+<body>
+<h1>Dashboard Self-Balancing Robot</h1>
+<div class="sub">PID bertingkat + sinkronisasi roda &middot; ESP32 &middot; BLE (Nordic UART) &middot; &Delta;t = 10 ms</div>
+
+<div class="grid">
+<div>
+  <div class="card">
+    <h3>Koneksi</h3>
+    <div class="row"><button id="btnConn" class="pri half">Hubungkan Bluetooth</button><button id="btnDisc" class="half" disabled>Putus</button></div>
+    <div class="row"><span id="connTxt" class="hint">Belum terhubung.</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Kendali</h3>
+    <div class="row"><button id="btnArm" class="ok half" disabled>ARM</button><button id="btnZero" class="half" disabled>ZERO sudut</button></div>
+    <button id="btnStop" class="stop" disabled>STOP (Spasi)</button>
+    <div class="row" style="margin-top:10px"><label>vsp (cm/s)</label><input type="number" id="vspVal" step="any" min="0"></div>
+    <div class="row"><button id="btnFwd" class="move" disabled>&#9650; MAJU</button></div>
+    <div class="hint">Tahan tombol = robot bergerak; lepas = vsp 0. Dashboard mengirim ulang vsp tiap 100 ms.</div>
+  </div>
+
+  <div class="card">
+    <h3>Parameter PID</h3>
+    <div class="hint" style="margin-bottom:6px">Awal = 0 (motor tidak bergerak). Konvensi tanda: &theta; positif = miring ke belakang, jadi <b>Kpv dan Kiv diisi NEGATIF</b>; Kpa, Kia, Kda, Kps positif.</div>
+    <div class="row"><label>Kpa (P sudut)</label><input type="number" id="kpa" step="any"><button data-set="kpa">Set</button></div>
+    <div class="row"><label>Kia (I sudut)</label><input type="number" id="kia" step="any"><button data-set="kia">Set</button></div>
+    <div class="row"><label>Kda (D sudut)</label><input type="number" id="kda" step="any"><button data-set="kda">Set</button></div>
+    <div class="row"><label>Kpv (P kecepatan)</label><input type="number" id="kpv" step="any"><button data-set="kpv">Set</button></div>
+    <div class="row"><label>Kiv (I kecepatan)</label><input type="number" id="kiv" step="any"><button data-set="kiv">Set</button></div>
+    <div class="row"><label>Kps (P sinkron)</label><input type="number" id="kps" step="any"><button data-set="kps">Set</button></div>
+    <div class="row"><label>Batas |&theta;sp| (&deg;)</label><input type="number" id="lim" step="any"><button data-set="lim">Set</button></div>
+    <div class="row"><button id="btnAll" class="pri half" disabled>Kirim semua</button><button id="btnGet" class="half" disabled>Baca dari robot</button></div>
+    <div class="hint">Kdv = 0, Kis = 0, Kds = 0 (tetap di firmware, sesuai Pers. 3.2 dan 3.6). Nilai tersimpan di robot saat motor mati.</div>
+  </div>
+
+  <div class="card">
+    <h3>Pengujian &amp; rekam data</h3>
+    <div class="row"><label>Toleransi (&deg;)</label><input type="number" id="tolIn" step="any" min="0" value="0.5"></div>
+    <div class="hint" style="margin-bottom:6px">Hanya untuk lampu dan pita grafik. Hitungan resmi (ts, ess) tetap di Excel dengan nilai yang sama.</div>
+    <div class="row"><label>Durasi gerak (s)</label><input type="number" id="durVal" step="any" min="0"></div>
+    <div class="row"><button id="btnA" class="half" disabled>A. Maju</button></div>
+    <div class="row"><label>Rekam gangguan (s)</label><input type="number" id="recB" step="any" min="0"><button id="btnB" disabled>B. Rekam</button></div>
+    <div class="hint">B: klik Rekam lalu beri dorongan manual. Data otomatis dikirim setelah rekam selesai.</div>
+    <div class="row"><label>Nama file</label><input type="text" id="fname" value="A_maju_1"></div>
+    <div class="row"><label>Desimal Excel</label><select id="decSep"><option value=",">koma (Excel ID)</option><option value=".">titik</option></select></div>
+    <div class="row"><button id="btnDump" class="half" disabled>Ambil ulang data</button><button id="btnSave" class="ok half" disabled>Unduh .txt</button></div>
+    <div class="row"><button id="btnStat" class="half" disabled>STAT waktu</button><button id="btnLive" class="half">Grafik live</button></div>
+  </div>
+</div>
+
+<div>
+  <div class="card">
+    <div class="row"><span id="stBadge" class="badge">TERPUTUS</span><span class="lamp" id="lamp"></span><span class="hint">dalam toleransi (|&theta;sp &minus; &theta;| &le; toleransi)</span></div>
+    <div class="kv">
+      <div><small>&theta; (&deg;)</small><span class="big" id="vTh">-</span></div>
+      <div><small>&theta;sp (&deg;)</small><span class="big" id="vThSp">-</span></div>
+      <div><small>v (cm/s)</small><span class="big" id="vV">-</span></div>
+      <div><small>es (cm)</small><span class="big" id="vEs">-</span></div>
+    </div>
+  </div>
+  <div class="card"><h3 id="ttl1">Sudut &theta; dan &theta;sp (pita hijau = &plusmn; toleransi dari &theta;sp)</h3><canvas id="c1"></canvas></div>
+  <div class="card"><h3 id="ttl2">Kecepatan v dan vsp (cm/s)</h3><canvas id="c2"></canvas></div>
+  <div class="card"><h3>Log</h3><div id="log"></div></div>
+</div>
+</div>
+
+<div class="stopbar"><button id="btnStop2" class="stop" disabled>STOP</button></div>
+
+<script>
+'use strict';
+const NUS = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const CH_WRITE  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';   // klien -> robot
+const CH_NOTIFY = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';   // robot -> klien
+let TOL = 0.5;
+const LIVE_MAX = 300, GAINS = ['kpa','kia','kda','kpv','kiv','kps','lim'];
+const $ = id => document.getElementById(id);
+
+let dev = null, chW = null, chN = null, chain = Promise.resolve(), pending = 0, rxBuf = '';
+let wakeLock = null;
+let holdTimer = null, holdStop = null, waiter = null, mode = 'live';
+const dec = new TextDecoder();
+const live = { th: [], sp: [], v: [], vsp: [] };
+let rec = null;            // {n, dt, rows:[], done}
+
+function log(s) { const l = $('log'); l.textContent += s + '\n'; if (l.textContent.length > 6000) l.textContent = l.textContent.slice(-4000); l.scrollTop = l.scrollHeight; }
+function enable(on) { ['btnStop2','btnDisc','btnArm','btnZero','btnStop','btnFwd','btnAll','btnGet','btnA','btnB','btnDump','btnStat'].forEach(i => $(i).disabled = !on); }
+
+// ---------- kirim ----------
+function send(cmd) {
+  if (!chW) { log('Belum terhubung'); return Promise.resolve(); }
+  const bytes = new TextEncoder().encode(cmd + '\n');
+  pending++;
+  chain = chain.then(async () => {
+    for (let i = 0; i < bytes.length; i += 20) {
+      const part = bytes.slice(i, i + 20);
+      if (chW.writeValueWithoutResponse) await chW.writeValueWithoutResponse(part); else await chW.writeValue(part);
+    }
+  }).catch(e => log('Gagal kirim: ' + e.message)).finally(() => pending--);
+  return chain;
+}
+function waitFor(key, ms) {      // tunggu balasan OK,<key> / ERR,<key>
+  return new Promise(res => { waiter = { key, res }; setTimeout(() => { if (waiter && waiter.key === key) { waiter = null; res(false); } }, ms); });
+}
+
+// ---------- terima ----------
+function onNotify(e) {
+  const v = e.target.value;
+  rxBuf += dec.decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength), { stream: true });
+  let i;
+  while ((i = rxBuf.indexOf('\n')) >= 0) { const line = rxBuf.slice(0, i).trim(); rxBuf = rxBuf.slice(i + 1); if (line) onLine(line); }
+}
+
+function onLine(line) {
+  const f = line.split(',');
+  switch (f[0]) {
+    case 'T': {
+      const th = +f[2], sp = +f[3], v = +f[4], vsp = +f[5], es = +f[6], st = f[7], inTol = st === 'A' && Math.abs(sp - th) <= TOL;
+      $('vTh').textContent = th.toFixed(2); $('vThSp').textContent = sp.toFixed(2);
+      $('vV').textContent = v.toFixed(1);   $('vEs').textContent = es.toFixed(2);
+      setState(st); $('lamp').classList.toggle('on', inTol);
+      for (const [k, x] of [['th', th], ['sp', sp], ['v', v], ['vsp', vsp]]) { live[k].push(x); if (live[k].length > LIVE_MAX) live[k].shift(); }
+      if (mode === 'live') redraw();
+      break;
+    }
+    case 'PAR': GAINS.forEach((g, i) => $(g).value = f[i + 1]); log('Parameter dibaca dari robot.'); break;
+    case 'H': rec = { n: +f[1], dt: +f[2], rows: new Array(+f[1]), done: false }; log('Menerima ' + f[1] + ' sampel...'); break;
+    case 'D': if (rec) rec.rows[+f[1]] = f.slice(2).map(Number); break;
+    case 'E': if (rec) finishDump(); break;
+    case 'EVT':
+      if (f[1] === 'FALL') log('TUMBANG: ' + f.slice(2).join(' ') + '  (durasi stabil = rec x 0,01 s)');
+      if (f[1] === 'RECDONE') { log('Rekam selesai: ' + f[2] + ' sampel. Meminta data...'); send('DUMP'); }
+      break;
+    case 'OK': case 'ERR':
+      log(line);
+      if (waiter && waiter.key === f[1]) { const w = waiter; waiter = null; w.res(f[0] === 'OK'); }
+      break;
+    default: log(line);
+  }
+}
+
+function setState(st) {
+  const b = $('stBadge'); b.className = 'badge ' + st;
+  b.textContent = st === 'A' ? 'ARMED (menyeimbangkan)' : st === 'F' ? 'TUMBANG' : 'IDLE (motor mati)';
+}
+
+function finishDump() {
+  const miss = []; for (let i = 0; i < rec.n; i++) if (!rec.rows[i]) miss.push(i);
+  if (miss.length) { log('PERINGATAN: ' + miss.length + ' sampel hilang (mis. indeks ' + miss[0] + '). Klik "Ambil ulang data".'); rec = null; return; }
+  rec.done = true; $('btnSave').disabled = false; log('Data lengkap: ' + rec.n + ' sampel, dt = ' + rec.dt + ' ms.');
+  mode = 'rec'; redraw();
+}
+
+// ---------- grafik ----------
+function plot(cv, series, opt) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth * dpr, H = cv.clientHeight * dpr;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const g = cv.getContext('2d'); g.clearRect(0, 0, W, H);
+  const P = { l: 46 * dpr, r: 8 * dpr, t: 8 * dpr, b: 20 * dpr };
+  let lo = Infinity, hi = -Infinity;
+  series.forEach(s => s.y.forEach(v => { if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+  if (opt.band) { const sp = series[opt.band].y; sp.forEach(v => { lo = Math.min(lo, v - TOL); hi = Math.max(hi, v + TOL); }); }
+  if (!isFinite(lo)) { lo = -1; hi = 1; }
+  if (hi - lo < 2) { const m = (hi + lo) / 2; lo = m - 1; hi = m + 1; }
+  const n = Math.max(...series.map(s => s.y.length), 2);
+  const X = i => P.l + (W - P.l - P.r) * i / (n - 1), Y = v => H - P.b - (H - P.t - P.b) * (v - lo) / (hi - lo);
+  g.font = (11 * dpr) + 'px sans-serif'; g.fillStyle = '#5f6b7a'; g.strokeStyle = '#e3e8ef'; g.lineWidth = dpr;
+  for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4, y = Y(v); g.beginPath(); g.moveTo(P.l, y); g.lineTo(W - P.r, y); g.stroke(); g.fillText(v.toFixed(1), 2 * dpr, y + 4 * dpr); }
+  if (lo < 0 && hi > 0) { g.strokeStyle = '#9aa5b3'; g.beginPath(); g.moveTo(P.l, Y(0)); g.lineTo(W - P.r, Y(0)); g.stroke(); }
+  if (opt.band) {                                             // pita toleransi +-0,5 deg di sekitar setpoint
+    const sp = series[opt.band].y; g.fillStyle = 'rgba(25,135,84,.18)'; g.beginPath();
+    sp.forEach((v, i) => i ? g.lineTo(X(i), Y(v + TOL)) : g.moveTo(X(i), Y(v + TOL)));
+    for (let i = sp.length - 1; i >= 0; i--) g.lineTo(X(i), Y(sp[i] - TOL));
+    g.closePath(); g.fill();
+  }
+  series.forEach(s => { g.strokeStyle = s.color; g.lineWidth = 1.6 * dpr; g.setLineDash(s.dash ? [5 * dpr, 4 * dpr] : []); g.beginPath();
+    s.y.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v))); g.stroke(); });
+  g.setLineDash([]); g.fillStyle = '#5f6b7a'; g.fillText(opt.xlab(n), P.l, H - 4 * dpr);
+}
+function redraw() {
+  if (mode === 'rec' && rec && rec.done) {
+    const col = i => rec.rows.map(r => r[i]), t = n => 't = 0 ... ' + ((n - 1) * rec.dt / 1000).toFixed(2) + ' s (data rekaman)';
+    plot($('c1'), [{ y: col(0), color: '#c82333' }, { y: col(1), color: '#0b5ed7', dash: true }], { band: 1, xlab: t });
+    plot($('c2'), [{ y: col(2), color: '#0b5ed7' }, { y: col(3), color: '#6c757d', dash: true }], { xlab: t });
+  } else {
+    const t = n => 'live: ' + (n / (1000 / 100)).toFixed(0) + ' s terakhir';
+    plot($('c1'), [{ y: live.th, color: '#c82333' }, { y: live.sp, color: '#0b5ed7', dash: true }], { band: 1, xlab: t });
+    plot($('c2'), [{ y: live.v, color: '#0b5ed7' }, { y: live.vsp, color: '#6c757d', dash: true }], { xlab: t });
+  }
+}
+
+// ---------- gerak (tahan tombol / skenario) ----------
+function startHold(v, seconds) {
+  stopHold(false);
+  const tick = () => { if (pending < 3) send('VSP=' + v); };
+  tick(); holdTimer = setInterval(tick, 100);
+  if (isFinite(seconds)) holdStop = setTimeout(() => stopHold(true), seconds * 1000);
+}
+function stopHold(sendZero) {
+  clearInterval(holdTimer); clearTimeout(holdStop); holdTimer = holdStop = null;
+  $('btnFwd').classList.remove('on');
+  if (sendZero) { send('VSP=0'); send('VSP=0'); }
+}
+function bindHold(btn, dir) {
+  const b = $(btn);
+  b.addEventListener('pointerdown', e => { const v = parseFloat($('vspVal').value); if (!(v > 0)) { log('Isi vsp (cm/s) dulu.'); return; } b.setPointerCapture(e.pointerId); b.classList.add('on'); startHold(dir * v, Infinity); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, () => { if (holdTimer) stopHold(true); }));
+}
+async function scenarioA(dir) {
+  const v = parseFloat($('vspVal').value), dur = parseFloat($('durVal').value);
+  if (!(v > 0) || !(dur > 0)) { log('Isi vsp dan durasi gerak dulu.'); return; }
+  mode = 'live'; $('btnSave').disabled = true; send('REC=' + dur);
+  if (!(await waitFor('REC', 1500))) { log('Rekam gagal (robot belum ARM?). Skenario dibatalkan.'); return; }
+  startHold(dir * v, dur);
+}
+
+// ---------- unduh ----------
+function download() {
+  if (!rec || !rec.done) return;
+  const sep = $('decSep').value, fmt = x => String(x).replace('.', sep);
+  const head = ['k', 't_s', 'theta_deg', 'thetasp_deg', 'v_cms', 'vsp_cms', 'u', 'us', 'es_cm'];
+  const lines = [head.join('\t')];
+  rec.rows.forEach((r, k) => lines.push([k, (k * rec.dt / 1000).toFixed(2), ...r].map(fmt).join('\t')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/plain' }));
+  a.download = ($('fname').value || 'data') + '.txt'; a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ---------- koneksi ----------
+async function connect() {
+  if (!navigator.bluetooth) { log('Web Bluetooth tidak tersedia. Pakai Chrome/Edge lewat localhost atau HTTPS.'); return; }
+  try {
+    dev = await navigator.bluetooth.requestDevice({ filters: [{ services: [NUS] }] });
+    dev.addEventListener('gattserverdisconnected', onDisc);
+    $('connTxt').textContent = 'Menyambung ke ' + dev.name + '...';
+    const srv = await dev.gatt.connect(), svc = await srv.getPrimaryService(NUS);
+    chW = await svc.getCharacteristic(CH_WRITE); chN = await svc.getCharacteristic(CH_NOTIFY);
+    chN.addEventListener('characteristicvaluechanged', onNotify); await chN.startNotifications();
+    enable(true); $('btnConn').disabled = true; $('connTxt').textContent = 'Terhubung: ' + dev.name;
+    log('Terhubung.'); setTimeout(() => send('GET'), 300);
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').then(l => { wakeLock = l; }).catch(() => {});   // layar tetap menyala
+  } catch (e) { log('Koneksi gagal: ' + e.message); $('connTxt').textContent = 'Belum terhubung.'; }
+}
+function onDisc() {
+  stopHold(false); if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; } chW = chN = null; enable(false); $('btnConn').disabled = false;
+  $('connTxt').textContent = 'Terputus.'; $('stBadge').className = 'badge'; $('stBadge').textContent = 'TERPUTUS'; log('Koneksi terputus.');
+}
+
+// ---------- pasang event ----------
+$('btnConn').onclick = connect;
+$('btnDisc').onclick = () => dev && dev.gatt.connected && dev.gatt.disconnect();
+$('btnArm').onclick  = () => send('ARM');
+$('btnZero').onclick = () => send('ZERO');
+const doStop = () => { stopHold(false); send('VSP=0'); send('STOP'); };
+$('btnStop').onclick = doStop;
+$('btnStop2').onclick = doStop;
+$('btnGet').onclick  = () => send('GET');
+$('btnStat').onclick = () => send('STAT');
+$('btnDump').onclick = () => { rec = null; send('DUMP'); };
+$('btnSave').onclick = download;
+$('btnLive').onclick = () => { mode = 'live'; redraw(); };
+$('btnA').onclick  = () => scenarioA(+1);
+$('btnB').onclick  = async () => {
+  const s = parseFloat($('recB').value); if (!(s > 0)) { log('Isi durasi rekam gangguan.'); return; }
+  mode = 'live'; $('btnSave').disabled = true; send('REC=' + s);
+  if (await waitFor('REC', 1500)) log('Merekam ' + s + ' s: beri dorongan sekarang.');
+};
+function sendGain(g) {
+  const val = parseFloat($(g).value) || 0;
+  if ((g === 'kpv' || g === 'kiv') && val > 0 && !confirm(g.toUpperCase() + ' positif. Dengan konvensi theta positif = miring ke belakang, nilai ini seharusnya NEGATIF. Tetap kirim?')) return Promise.resolve();
+  return send(g.toUpperCase() + '=' + val);
+}
+$('btnAll').onclick = async () => { for (const g of GAINS) await sendGain(g); send('GET'); };
+document.querySelectorAll('[data-set]').forEach(b => b.onclick = () => sendGain(b.dataset.set));
+$('tolIn').oninput = () => { const t = parseFloat($('tolIn').value); if (t > 0) { TOL = t; redraw(); } };
+bindHold('btnFwd', +1);
+document.addEventListener('keydown', e => { if (e.code === 'Space' && chW && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); $('btnStop').click(); } });
+window.addEventListener('resize', redraw);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+redraw();
+</script>
+</body>
+</html>
